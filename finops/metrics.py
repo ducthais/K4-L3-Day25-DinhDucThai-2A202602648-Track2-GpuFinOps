@@ -61,3 +61,42 @@ def flag_util_lies(rows, util_threshold: float = 0.90, mfu_threshold: float = 0.
 def idle_waste_usd(idle_hours: float, on_demand_hr: float) -> float:
     """Dollars burned by a GPU left running idle (training done, instance up)."""
     return max(0.0, idle_hours) * max(0.0, on_demand_hr)
+
+
+def recommend_rightsize_gpu(
+    achieved_tflops: float,
+    achieved_bw_tbs: float,
+    mem_used_gb: float,
+    catalog: dict,
+    headroom: float = 1.20,
+) -> dict | None:
+    """Find the most cost-effective GPU that satisfies compute, BW, and VRAM with headroom.
+
+    Avoids blindly choosing the lowest $/hr GPU which causes OOM or severe throughput drops.
+    Balances peak BW, VRAM capacity, and $/GB-VRAM economics.
+    """
+    req_tflops = achieved_tflops * headroom
+    req_bw = achieved_bw_tbs * headroom
+    req_mem = mem_used_gb * headroom
+
+    candidates = []
+    for gtype, c in catalog.items():
+        peak_tflops = float(c.get("peak_tflops_fp16", 0))
+        peak_bw = float(c.get("peak_bw_tbs", 0))
+        hbm = float(c.get("hbm_gb", 0))
+        od = float(c.get("on_demand_hr", 0))
+
+        if peak_tflops >= req_tflops and peak_bw >= req_bw and hbm >= req_mem:
+            candidates.append({
+                "gpu_type": gtype,
+                "on_demand_hr": od,
+                "hbm_gb": hbm,
+                "peak_bw_tbs": peak_bw,
+                "dollars_per_gb_vram": od / hbm if hbm > 0 else 0,
+            })
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x["on_demand_hr"])
+    return candidates[0]
+

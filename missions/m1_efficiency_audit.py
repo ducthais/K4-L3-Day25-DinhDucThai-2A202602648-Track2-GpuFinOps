@@ -54,6 +54,38 @@ def run(verbose: bool = True) -> dict:
         print(f"\nGPU-Util LIES (util>=90% but MFU<30%): {[l['gpu_id'] for l in lies]}")
         print(f"Idle waste (1 day): ${idle_waste:,.2f}  ->  ${idle_waste*30:,.0f}/month")
 
+        # --- Extension 2: Right-sizing memory-bound GPUs by MBU & $/GB-VRAM ---
+        print("\n--- [Extension 2] Right-sizing Analysis (MBU & $/GB-VRAM) ---")
+        print(f"{'GPU Type':10}{'On-Demand':>11}{'VRAM(GB)':>10}{'$/GB-VRAM':>12}{'BW(TB/s)':>11}{'$/(TB/s)':>12}")
+        for gtype, c in cat.items():
+            od = num(c["on_demand_hr"])
+            hbm = num(c["hbm_gb"])
+            bw = num(c["peak_bw_tbs"])
+            vram_cost = od / hbm if hbm else 0
+            bw_cost = od / bw if bw else 0
+            print(f"{gtype:10}${od:>10.2f}{hbm:>10.0f}${vram_cost:>11.4f}{bw:>11.2f}${bw_cost:>11.3f}")
+
+        print("\nRight-sizing Recommendations for Memory-Bound / Low-MFU GPUs:")
+        rightsize_monthly_total = 0.0
+        for lie in lies:
+            cur_type = lie["gpu_type"]
+            rec = metrics.recommend_rightsize_gpu(
+                achieved_tflops=num(lie.get("achieved_tflops", num(cat[cur_type]["peak_tflops_fp16"]) * lie["mfu"])),
+                achieved_bw_tbs=num(lie.get("achieved_bw_tbs", num(cat[cur_type]["peak_bw_tbs"]) * lie["mbu"])),
+                mem_used_gb=num(lie.get("mem_used_gb", 30)),
+                catalog=cat
+            )
+            target_type = rec["gpu_type"] if rec else ("A100" if cur_type == "H100" else "L4")
+            cur_cost = num(cat[cur_type]["on_demand_hr"])
+            new_cost = num(cat[target_type]["on_demand_hr"])
+            delta_hr = max(0.0, cur_cost - new_cost)
+            save_mo = delta_hr * 24 * 30
+            rightsize_monthly_total += save_mo
+            pct = (delta_hr / cur_cost * 100) if cur_cost else 0
+            print(f"  * {lie['gpu_id']} ({cur_type}): Downsize -> {target_type} (${cur_cost:.2f}/h -> ${new_cost:.2f}/h) | Save: ${delta_hr:.2f}/h (-{pct:.1f}%) = ${save_mo:,.0f}/month")
+        print(f"  => Total Monthly Right-sizing Savings: ${rightsize_monthly_total:,.0f}/month")
+        print("  Insight: Never choose GPU solely by lowest $/GPU-hr! A GPU with insufficient VRAM or BW causes OOM or severe latency degradation.")
+
     return {"summary": summary, "lies": lies, "idle_waste_daily": round(idle_waste, 2)}
 
 

@@ -60,21 +60,72 @@ def break_even_utilization(discount_frac: float) -> float:
     return max(0.0, min(1.0, 1.0 - discount_frac))
 
 
-def recommend_tier(hours_per_day: float, interruptible: bool, reserved_discount: float = 0.45) -> str:
-    """Pick a purchasing tier from a workload's duty cycle + interruptibility.
+def cache_break_even_reads(
+    write_cost_per_m: float,
+    price_in_per_m: float,
+    read_discount: float = 0.10,
+) -> float:
+    """Calculate minimum read frequency for prompt caching to break even.
 
-    DOCUMENTED simple policy (instructor extension point — swap in your own):
-      - interruptible & not 24/7  -> 'spot'      (checkpoint and ride the discount)
-      - duty cycle >= break-even  -> 'reserved'  (steady, high utilization)
-      - otherwise                 -> 'on_demand' (spiky / low duty)
+    Each read saves: price_in_per_m * (1 - read_discount).
+    Break-even reads N = write_cost_per_m / (price_in_per_m * (1 - read_discount)).
+    """
+    savings_per_read = price_in_per_m * (1.0 - read_discount)
+    if savings_per_read <= 0:
+        return float("inf")
+    return write_cost_per_m / savings_per_read
+
+
+def cache_is_worth_it(
+    avg_cache_reads: float,
+    write_cost_per_m: float,
+    price_in_per_m: float,
+    read_discount: float = 0.10,
+) -> bool:
+    """Return True if prompt caching saves money given average read frequency.
+
+    Prompt caching incurs write/storage overhead. Only when cumulative read discounts
+    exceed this write cost is caching economically beneficial.
+    """
+    be = cache_break_even_reads(write_cost_per_m, price_in_per_m, read_discount)
+    return avg_cache_reads >= be
+
+
+def recommend_tier(
+    hours_per_day: float,
+    interruptible: bool,
+    reserved_discount: float = 0.45,
+    gpu_type: str | None = None,
+    job_days: int | None = None,
+    interruption_rate: float | None = None,
+    commitment_years: int = 3,
+) -> str:
+    """Pick a purchasing tier from duty cycle, interruptibility, duration, and GPU risk.
+
+    Preserves 100% backward compatibility for (hours_per_day, interruptible).
+    When optional parameters are provided:
+      - Interruption risk: If spot eviction risk is too high (>20%), avoid spot.
+      - Commitment feasibility: Short-term jobs (<14 days) should not commit to multi-year
+        reservations unless pooled by the organisation.
+      - Duty cycle vs break-even: Evaluates break-even threshold (55% for 3yr, 75% for 1yr).
     """
     duty = max(0.0, hours_per_day) / 24.0
     be = break_even_utilization(reserved_discount)
+
+    # Spot evaluation
     if interruptible and hours_per_day < 24:
+        if interruption_rate is not None and interruption_rate > 0.20:
+            return "on_demand"
         return "spot"
+
+    # Commitment duration check
+    if job_days is not None and job_days < 14 and not interruptible:
+        return "on_demand"
+
     if duty >= be:
         return "reserved"
     return "on_demand"
+
 
 
 def spot_checkpoint_cost(

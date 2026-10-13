@@ -52,12 +52,21 @@ def run(verbose: bool = True) -> dict:
         "best_region": min(sustainability.REGION_CARBON, key=sustainability.REGION_CARBON.get),
     }
 
-    md = report.build_report(baseline, optimized, levers, sustainability=sust)
+    unit_economics = {
+        "baseline_daily": r2["baseline_daily"],
+        "optimized_daily": r2["optimized_daily"],
+        "baseline_per_m": r2["baseline_per_m"],
+        "optimized_per_m": r2["optimized_per_m"],
+        "inference_savings_pct": r2["savings_pct"],
+        "total_tokens": r2["total_tokens"],
+    }
+    md = report.build_report(baseline, optimized, levers, sustainability=sust, unit_economics=unit_economics)
     out_md = os.path.join(ROOT, "outputs", "report.md")
     os.makedirs(os.path.dirname(out_md), exist_ok=True)
-    with open(out_md, "w") as f:
+    with open(out_md, "w", encoding="utf-8") as f:
         f.write(md)
-    png = report.savings_waterfall(levers, os.path.join(ROOT, "outputs", "savings.png"))
+    png = report.savings_waterfall(levers, os.path.join(ROOT, "outputs", "savings.png"),
+                                   baseline_usd=baseline, optimized_usd=optimized)
 
     if verbose:
         print("== M5 Optimization Report ==")
